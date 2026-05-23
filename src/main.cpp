@@ -28,7 +28,7 @@
 #include "stepmotor.h"
 #include "lcd.h"
 #include "dbutton.h"
-//todos tontos menos yo 
+//todos tontos menos nosotros aaaaa
 // ============================================================
 // CONSTANTES MECÁNICAS
 // Correa GT2 (paso 2 mm) + polea 20 dientes = 40 mm/vuelta
@@ -39,12 +39,12 @@
 #define AXIS_MAX_STEPS      ((int32_t)(AXIS_LENGTH_MM / MM_PER_STEP))   // 2750 pasos
 #define AXIS_CENTER_STEPS   (AXIS_MAX_STEPS / 2)                         // 1375 pasos = 275 mm
 #define AXIS_HOME_STEPS     0
-
+//
 // ============================================================
 // VELOCIDAD DE MOTORES
 // stepDelayUs: menor valor = más rápido; mínimo seguro ≈ 500 µs para NEMA
 // ============================================================
-#define STEP_DELAY_MIN_US   2000    // máxima velocidad (joystick en extremo)
+#define STEP_DELAY_MIN_US   1000UL    // máxima velocidad (joystick en extremo)
 #define STEP_DELAY_MAX_US   5000UL   // mínima velocidad (recién sale del deadband)
 #define STEP_DELAY_TRAV_US  1000UL   // velocidad de travesía: BEGIN, ZERO_X (mitad de máxima)
 
@@ -54,8 +54,8 @@
 // ============================================================
 #define BTN_LEFT   GPIO_NUM_14
 #define BTN_RIGHT  GPIO_NUM_27
-#define BTN_UP     GPIO_NUM_16   // reservado (eje Y va al esclavo)
-#define BTN_DOWN   GPIO_NUM_17   // reservado (eje Y va al esclavo)
+/*#define BTN_UP     GPIO_NUM_16   // reservado (eje Y va al esclavo)
+#define BTN_DOWN   GPIO_NUM_17   // reservado (eje Y va al esclavo)*/
 
 // ============================================================
 // DURACIONES (µs)
@@ -87,7 +87,7 @@
 
 // Motor X2 — lado derecho, montado invertido → se invierte por software
 #define MX2_STEP  GPIO_NUM_4
-#define MX2_DIR   GPIO_NUM_13
+#define MX2_DIR   GPIO_NUM_16
 
 // LCD I2C
 #define LCD_SDA_NUM   GPIO_NUM_21
@@ -144,9 +144,9 @@ static DebouncedButton btnCoinSim(BTN_COIN_SIM, DEBOUNCE_US);
 static DebouncedButton btnStart  (BTN_START,    DEBOUNCE_US);
 static DebouncedButton btnLeft   (BTN_LEFT,     DEBOUNCE_US);
 static DebouncedButton btnRight  (BTN_RIGHT,    DEBOUNCE_US);
-static DebouncedButton btnUp     (BTN_UP,       DEBOUNCE_US);
+/*static DebouncedButton btnUp     (BTN_UP,       DEBOUNCE_US);
 static DebouncedButton btnDown   (BTN_DOWN,     DEBOUNCE_US);
-
+*/
 // ============================================================
 // VARIABLES GLOBALES DE ESTADO
 // ============================================================
@@ -218,7 +218,7 @@ static bool stepX(int dir) {
 
     // X1: adelante para X positivo   |   X2: invertido porque está montado al revés
     motorX1.setDirection(going_pos);
-    motorX2.setDirection(!going_pos);
+    motorX2.setDirection(going_pos);
 
     bool stepped = motorX1.update();   // true si el timer interno disparó un paso
     motorX2.update();                  // mismo delay → ambos avanzan juntos
@@ -285,7 +285,7 @@ static State executeMoney() {
         money_total    = 0;
         coin_sim_count = 0;
         sim_ready      = false;
-        x_steps        = 0;        // la máquina está en home al volver aquí
+        x_steps        = 0;
         gpio_set_level(SLAVE_TRIG,  0);
         gpio_set_level(SLAVE_BEGIN, 0);
         gpio_set_level(CHANGE_OUT,  0);
@@ -293,15 +293,22 @@ static State executeMoney() {
 
     pollCoins();
 
-    // TODO ← personaliza el mensaje; coin_sim_count y COIN_SIM_PRESSES disponibles
-    char msg[33];
-    snprintf(msg, sizeof(msg), "Fichas: %d/%d\nPulsa START", coin_sim_count, COIN_SIM_PRESSES);
+    // paid = suficiente dinero (monedas reales O simulación completada)
+    bool paid = sim_ready || (money_total >= COIN_PRICE);
+
+    char msg[48];
+    if (!paid) {
+        // Fase 1: mostrar dinero acumulado y avance de simulación
+        snprintf(msg, sizeof(msg),"BIENVENIDO@ \n $%d/$%d pesos",
+                 money_total, COIN_PRICE );
+    } else {
+        // Fase 2: precio cubierto, esperar START
+        snprintf(msg, sizeof(msg), "Listo! $%d\nPulsa START!", COIN_PRICE);
+    }
     lcdUpdate(msg);
 
-    // Simulación: 3 pulsaciones → inicia automáticamente
-    // Monedas reales: 12 pesos + botón START
-    bool go = sim_ready || (money_total >= COIN_PRICE && justPressed(btnStart, prev_btn_start));
-    if (go) {
+    // Siempre se requiere START después de pagar
+    if (paid && justPressed(btnStart, prev_btn_start)) {
         motorX1.setDelay(STEP_DELAY_TRAV_US);
         motorX2.setDelay(STEP_DELAY_TRAV_US);
         return STATE_BEGIN;
@@ -332,13 +339,25 @@ static State executeBegin() {
 
 // GAME — Joystick controla X; speed binaria; timer de 20 s
 static State executeGame() {
+    static int64_t joy_grace_us = 0;
+    static int     joy_last_dir = 0;
+
     if (is_new_state) {
         onEnterState();
         game_prev_sec = -1;
+        joy_grace_us  = 0;
+        joy_last_dir  = 0;
     }
 
-    // Leer botones y mover motores a velocidad máxima
+    // Leer botones con período de gracia de 60 ms para absorber glitches de EMI
+    // (el debounce tarda hasta 40 ms en re-establecerse tras un ruido breve)
     int dir = joyToDir();
+    if (dir != 0) {
+        joy_last_dir = dir;
+        joy_grace_us = esp_timer_get_time();
+    } else if (esp_timer_get_time() - joy_grace_us < 60000LL) {
+        dir = joy_last_dir;
+    }
 
     if (dir != 0) {
         bool at_limit = (dir > 0 && x_steps >= AXIS_MAX_STEPS - 1) ||
@@ -519,6 +538,7 @@ extern "C" void app_main() {
     // stepX() sobreescribirá esto en cada llamada, pero es buena práctica inicializar.
     motorX2.setDirection(false);
 
+    LCD::scan(LCD_SDA_NUM, LCD_SCL_NUM);
     if (!lcd.setup(LCD_SDA_NUM, LCD_SCL_NUM, LCD_I2C_ADDR))
         printf("[WARN] LCD no encontrado en 0x%02X — revisa el cableado\n", LCD_I2C_ADDR);
 
@@ -526,8 +546,9 @@ extern "C" void app_main() {
     btnStart.init();
     btnLeft.init();
     btnRight.init();
-    btnUp.init();
+    /*btnUp.init();
     btnDown.init();
+    */
 
     printf("[MASTER] Maquina de garra iniciada\n");
 
