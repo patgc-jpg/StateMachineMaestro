@@ -11,10 +11,11 @@
 //   - Señal de salida de cambio
 //
 // Comunicación con ESP ESCLAVO (maneja eje Y + eje Z + cierre de garra):
-//   SLAVE_TRIG (salida): maestro → esclavo; HIGH = "ejecuta tu secuencia"
-//   SLAVE_DONE (entrada): esclavo → maestro; HIGH = "terminé"
-//   Protocolo: maestro pone TRIG=HIGH → esclavo corre (bajar, cerrar, subir)
-//              esclavo pone DONE=HIGH → maestro pone TRIG=LOW → esclavo pone DONE=LOW
+//   SLAVE_BEGIN (salida, GPIO15): maestro → esclavo; HIGH = "ejecuta tu siguiente fase"
+//   SLAVE_DONE  (entrada, GPIO2): esclavo → maestro; HIGH = "terminé"
+//   Protocolo: maestro pone BEGIN=HIGH → esclavo ejecuta su fase actual
+//              esclavo pone DONE=HIGH → maestro pone BEGIN=LOW → esclavo pone DONE=LOW
+//   El esclavo distingue "centrar Y" vs "secuencia de garra" por su propio estado.
 // ============================================================
 
 #include <stdio.h>
@@ -110,8 +111,7 @@
 #define PROX_SENSOR  GPIO_NUM_39
 
 // Comunicación maestro ↔ esclavo
-#define SLAVE_TRIG   GPIO_NUM_23   // SALIDA: HIGH = ejecuta secuencia de garra
-#define SLAVE_BEGIN  GPIO_NUM_15   // SALIDA: HIGH = esclavo mueve Y al centro (BEGIN)
+#define SLAVE_BEGIN  GPIO_NUM_15   // SALIDA: HIGH = esclavo ejecuta su siguiente fase
 #define SLAVE_DONE   GPIO_NUM_2    // ENTRADA: HIGH = esclavo terminó su fase actual
 
 // Señal de dispensador de cambio
@@ -286,7 +286,6 @@ static State executeMoney() {
         coin_sim_count = 0;
         sim_ready      = false;
         x_steps        = 0;
-        gpio_set_level(SLAVE_TRIG,  0);
         gpio_set_level(SLAVE_BEGIN, 0);
         gpio_set_level(CHANGE_OUT,  0);
     }
@@ -396,7 +395,7 @@ static State executeGame() {
 static State executeWaitSlave() {
     if (is_new_state) {
         onEnterState();
-        gpio_set_level(SLAVE_TRIG, 1);   // dispara la secuencia del esclavo
+        gpio_set_level(SLAVE_BEGIN, 1);   // dispara la secuencia del esclavo
     }
 
     // TODO ← puedes mostrar sub-fases distintas según el tiempo transcurrido
@@ -404,7 +403,7 @@ static State executeWaitSlave() {
 
     // El esclavo pone SLAVE_DONE=HIGH cuando termina (bajar → cerrar → subir)
     if (gpio_get_level(SLAVE_DONE) == 1) {
-        gpio_set_level(SLAVE_TRIG, 0);   // desactiva; el esclavo bajará DONE en respuesta
+        gpio_set_level(SLAVE_BEGIN, 0);   // desactiva; el esclavo bajará DONE en respuesta
         motorX1.setDelay(STEP_DELAY_TRAV_US);
         motorX2.setDelay(STEP_DELAY_TRAV_US);
         return STATE_ZERO_X;
@@ -487,10 +486,6 @@ static StateNode state_table[NUM_STATES] = {
 // ============================================================
 static void setupGPIO() {
     // Salidas digitales — arrancan en LOW
-    gpio_reset_pin(SLAVE_TRIG);
-    gpio_set_direction(SLAVE_TRIG, GPIO_MODE_OUTPUT);
-    gpio_set_level(SLAVE_TRIG, 0);
-
     gpio_reset_pin(SLAVE_BEGIN);
     gpio_set_direction(SLAVE_BEGIN, GPIO_MODE_OUTPUT);
     gpio_set_level(SLAVE_BEGIN, 0);
