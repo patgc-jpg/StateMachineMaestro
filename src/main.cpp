@@ -29,6 +29,7 @@
 #include "stepmotor.h"
 #include "lcd.h"
 #include "dbutton.h"
+#include "CoinCounter.h"
 //todos tontos menos nosotros aaaaa
 // ============================================================
 // CONSTANTES MECÁNICAS
@@ -95,12 +96,11 @@
 #define LCD_SCL_NUM   GPIO_NUM_22
 #define LCD_I2C_ADDR  0x27
 
-// Tragamonedas — 4 líneas activo-LOW
-// GPIO34/35 son solo-entrada → pull-up externo de 10 kΩ obligatorio
+// Tragamonedas — 1 pulso por moneda, pin activo-LOW
 #define COIN_PIN_1   GPIO_NUM_32
-#define COIN_PIN_2   GPIO_NUM_33
-#define COIN_PIN_5   GPIO_NUM_34   // solo-entrada — pull-up externo
-#define COIN_PIN_10  GPIO_NUM_35   // solo-entrada — pull-up externo
+// #define COIN_PIN_2   GPIO_NUM_33   // no usado: aceptador de un solo pin
+// #define COIN_PIN_5   GPIO_NUM_34   // no usado
+// #define COIN_PIN_10  GPIO_NUM_35   // no usado
 
 // Botones
 #define BTN_COIN_SIM  GPIO_NUM_25   // simulación: pulsar COIN_SIM_PRESSES veces = monedas listas
@@ -140,6 +140,7 @@ struct StateNode { const char *name; StateAction on_loop; };
 static StepperMotor   motorX1(MX1_STEP, MX1_DIR, STEP_DELAY_TRAV_US);
 static StepperMotor   motorX2(MX2_STEP, MX2_DIR, STEP_DELAY_TRAV_US);
 static LCD            lcd;
+static CoinCounter    coinCounter(COIN_PIN_1, COIN_PRICE);
 static DebouncedButton btnCoinSim(BTN_COIN_SIM, DEBOUNCE_US);
 static DebouncedButton btnStart  (BTN_START,    DEBOUNCE_US);
 static DebouncedButton btnLeft   (BTN_LEFT,     DEBOUNCE_US);
@@ -156,8 +157,7 @@ static int64_t state_start_us = 0;
 // Posición del eje X en pasos desde home (0 = home, AXIS_CENTER_STEPS = centro)
 static int32_t x_steps = 0;
 
-// Dinero y simulación
-static int  money_total    = 0;
+// Simulación temporal
 static int  coin_sim_count = 0;
 static bool sim_ready      = false;
 
@@ -165,14 +165,6 @@ static bool sim_ready      = false;
 static bool prev_btn_coin_sim = false;
 static bool prev_btn_start    = false;
 
-// Detección de flanco del aceptador de monedas
-static bool prev_coin1   = false;
-static bool prev_coin2   = false;
-static bool prev_coin5   = false;
-static bool prev_coin10  = false;
-// -1 al arrancar: absorbe el pulso espurio del aceptador en el primer encendido.
-// Desde la segunda entrada a STATE_MONEY en adelante se reinicia a 0.
-static int  coin_counter = -1;
 
 
 // Estado anterior del segundo de juego (para actualizar LCD sólo al cambiar el segundo)
@@ -245,28 +237,14 @@ static int joyToDir() {
 
 // ============================================================
 // TRAGAMONEDAS
-// Detecta flancos en las 4 líneas del aceptador de monedas (modo real, placeholder).
+// CoinCounter gestiona el ISR, debounce y valor por rangos de pulsos.
+// update() retorna true cuando se alcanza la meta (COIN_PRICE).
+// start() reinicia la sesión: -1 en el primer arranque (absorbe pulso espurio),
+//         0 en las siguientes rondas.
 // En simulación: COIN_SIM_PRESSES pulsaciones del botón BTN_COIN_SIM activan sim_ready.
 // ============================================================
 static void pollCoins() {
-    // --- Aceptador real ---
-    // Líneas activo-LOW: flanco descendente = moneda insertada.
-    // coin_counter arranca en -1: el primer pulso lo mueve a 0 sin sumar dinero
-    // (absorbe el pulso espurio del aceptador al encender).
-    bool c1  = !gpio_get_level(COIN_PIN_1);
-    bool c2  = !gpio_get_level(COIN_PIN_2);
-    bool c5  = !gpio_get_level(COIN_PIN_5);
-    bool c10 = !gpio_get_level(COIN_PIN_10);
-
-    if (c1  && !prev_coin1)  { coin_counter++; if (coin_counter > 0) { money_total += 1;  printf("[COIN] $1  detectada — total: $%d\n", money_total); } }
-    if (c2  && !prev_coin2)  { coin_counter++; if (coin_counter > 0) { money_total += 2;  printf("[COIN] $2  detectada — total: $%d\n", money_total); } }
-    if (c5  && !prev_coin5)  { coin_counter++; if (coin_counter > 0) { money_total += 5;  printf("[COIN] $5  detectada — total: $%d\n", money_total); } }
-    if (c10 && !prev_coin10) { coin_counter++; if (coin_counter > 0) { money_total += 10; printf("[COIN] $10 detectada — total: $%d\n", money_total); } }
-
-    prev_coin1  = c1;
-    prev_coin2  = c2;
-    prev_coin5  = c5;
-    prev_coin10 = c10;
+    coinCounter.update();
 
     // --- Simulación temporal ---
     if (justPressed(btnCoinSim, prev_btn_coin_sim)) {
@@ -298,29 +276,25 @@ static State executeDefault() {
 static State executeMoney() {
     if (is_new_state) {
         onEnterState();
-        money_total    = 0;
+        coinCounter.start();   // -1 primer arranque, 0 rondas siguientes
         coin_sim_count = 0;
         sim_ready      = false;
         x_steps        = 0;
         gpio_set_level(SLAVE_BEGIN, 0);
         gpio_set_level(CHANGE_OUT,  0);
-        // Primera vez desde el arranque: deja coin_counter en -1 para absorber el
-        // pulso espurio del aceptador. Desde la segunda ronda en adelante: reinicia a 0.
-        if (coin_counter != -1) coin_counter = 0;
     }
 
     pollCoins();
 
-    // paid = suficiente dinero (monedas reales O simulación completada)
-    bool paid = sim_ready || (money_total >= COIN_PRICE);
+    // paid = meta alcanzada (monedas reales) O simulación completada
+    bool paid = coinCounter.isMetaAlcanzada() || sim_ready;
 
     char msg[48];
     if (!paid) {
-        // Fase 1: mostrar dinero acumulado y avance de simulación
-        snprintf(msg, sizeof(msg),"BIENVENIDO@ \n $%d/$%d pesos",
-                 money_total, COIN_PRICE );
+        int total = coinCounter.getTotal();
+        if (total < 0) total = 0;   // primer arranque: ocultar el -1 inicial
+        snprintf(msg, sizeof(msg), "BIENVENIDO@ \n $%d/$%d pesos", total, COIN_PRICE);
     } else {
-        // Fase 2: precio cubierto, esperar START
         snprintf(msg, sizeof(msg), "Listo! $%d\nPulsa START!", COIN_PRICE);
     }
     lcdUpdate(msg);
@@ -450,7 +424,7 @@ static State executeZeroX() {
         bool prize = (gpio_get_level(PROX_SENSOR) == 0);
 
         // Activar dispensador de cambio si se pagó de más con monedas reales
-        int change = money_total - COIN_PRICE;
+        int change = coinCounter.getTotal() - COIN_PRICE;
         if (change > 0) gpio_set_level(CHANGE_OUT, 1);
 
         return prize ? STATE_WINNER : STATE_LOSER;
@@ -522,19 +496,7 @@ static void setupGPIO() {
     // → conecta resistencia externa de 10 kΩ entre GPIO39 y 3.3 V
     gpio_set_direction(PROX_SENSOR, GPIO_MODE_INPUT);
 
-    // Tragamonedas línea $1 y $2 — pines bidireccionales, pull-up interno OK
-    gpio_reset_pin(COIN_PIN_1);
-    gpio_set_direction(COIN_PIN_1, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(COIN_PIN_1, GPIO_PULLUP_ONLY);
-
-    gpio_reset_pin(COIN_PIN_2);
-    gpio_set_direction(COIN_PIN_2, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(COIN_PIN_2, GPIO_PULLUP_ONLY);
-
-    // Tragamonedas línea $5 y $10 — GPIO34/35 son solo-entrada, sin pull interno
-    // → conecta resistencias externas de 10 kΩ a 3.3 V
-    gpio_set_direction(COIN_PIN_5,  GPIO_MODE_INPUT);
-    gpio_set_direction(COIN_PIN_10, GPIO_MODE_INPUT);
+    // COIN_PIN_1: CoinCounter::begin() configura el pin e instala el ISR
 
 }
 
@@ -546,6 +508,7 @@ extern "C" void app_main() {
 
     setupGPIO();
 
+    coinCounter.begin();
     motorX1.begin();
     motorX2.begin();
     // X2 arranca en reversa porque está físicamente montado al revés del gantry.

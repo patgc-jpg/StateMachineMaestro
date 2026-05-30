@@ -32,7 +32,7 @@ void CoinCounter::begin() {
 }
 
 void CoinCounter::start() {
-    _sumaTotal     = _first_run ? -1 : 0;
+    _sumaTotal     = _first_run ? 0 : 0;
     _metaAlcanzada = false;
     _first_run     = false;
 
@@ -55,10 +55,10 @@ bool CoinCounter::update() {
     portEXIT_CRITICAL(&_mux);
 
     int valorMoneda = 0;
-    if      (pulsosConfirmados >= 15  && pulsosConfirmados <= 42)  valorMoneda = 1;
-    else if (pulsosConfirmados >= 43  && pulsosConfirmados <= 95)  valorMoneda = 2;
-    else if (pulsosConfirmados >= 100 && pulsosConfirmados <= 200) valorMoneda = 5;
-    else if (pulsosConfirmados >= 240 && pulsosConfirmados <= 500) valorMoneda = 10;
+    if      (pulsosConfirmados >= 100  && pulsosConfirmados <= 150)  valorMoneda = 1;
+    else if (pulsosConfirmados >= 230  && pulsosConfirmados <= 300)  valorMoneda = 2;
+    else if (pulsosConfirmados >= 500 && pulsosConfirmados <= 700) valorMoneda = 5;
+    else if (pulsosConfirmados >= 1000 && pulsosConfirmados <= 1500) valorMoneda = 10;
 
     if (valorMoneda > 0) {
         _sumaTotal += valorMoneda;
