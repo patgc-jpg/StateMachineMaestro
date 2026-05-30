@@ -165,6 +165,15 @@ static bool sim_ready      = false;
 static bool prev_btn_coin_sim = false;
 static bool prev_btn_start    = false;
 
+// Detección de flanco del aceptador de monedas
+static bool prev_coin1   = false;
+static bool prev_coin2   = false;
+static bool prev_coin5   = false;
+static bool prev_coin10  = false;
+// -1 al arrancar: absorbe el pulso espurio del aceptador en el primer encendido.
+// Desde la segunda entrada a STATE_MONEY en adelante se reinicia a 0.
+static int  coin_counter = -1;
+
 
 // Estado anterior del segundo de juego (para actualizar LCD sólo al cambiar el segundo)
 static int32_t game_prev_sec = -1;
@@ -240,17 +249,24 @@ static int joyToDir() {
 // En simulación: COIN_SIM_PRESSES pulsaciones del botón BTN_COIN_SIM activan sim_ready.
 // ============================================================
 static void pollCoins() {
-    // --- Aceptador real: descomenta cuando esté conectado ---
-    // Las líneas son activo-LOW: flanco descendente = moneda insertada.
-    // bool c1  = !gpio_get_level(COIN_PIN_1);
-    // bool c2  = !gpio_get_level(COIN_PIN_2);
-    // bool c5  = !gpio_get_level(COIN_PIN_5);
-    // bool c10 = !gpio_get_level(COIN_PIN_10);
-    // if (c1  && !prev_coin1)  money_total += 1;
-    // if (c2  && !prev_coin2)  money_total += 2;
-    // if (c5  && !prev_coin5)  money_total += 5;
-    // if (c10 && !prev_coin10) money_total += 10;
-    // prev_coin1=c1; prev_coin2=c2; prev_coin5=c5; prev_coin10=c10;
+    // --- Aceptador real ---
+    // Líneas activo-LOW: flanco descendente = moneda insertada.
+    // coin_counter arranca en -1: el primer pulso lo mueve a 0 sin sumar dinero
+    // (absorbe el pulso espurio del aceptador al encender).
+    bool c1  = !gpio_get_level(COIN_PIN_1);
+    bool c2  = !gpio_get_level(COIN_PIN_2);
+    bool c5  = !gpio_get_level(COIN_PIN_5);
+    bool c10 = !gpio_get_level(COIN_PIN_10);
+
+    if (c1  && !prev_coin1)  { coin_counter++; if (coin_counter > 0) { money_total += 1;  printf("[COIN] $1  detectada — total: $%d\n", money_total); } }
+    if (c2  && !prev_coin2)  { coin_counter++; if (coin_counter > 0) { money_total += 2;  printf("[COIN] $2  detectada — total: $%d\n", money_total); } }
+    if (c5  && !prev_coin5)  { coin_counter++; if (coin_counter > 0) { money_total += 5;  printf("[COIN] $5  detectada — total: $%d\n", money_total); } }
+    if (c10 && !prev_coin10) { coin_counter++; if (coin_counter > 0) { money_total += 10; printf("[COIN] $10 detectada — total: $%d\n", money_total); } }
+
+    prev_coin1  = c1;
+    prev_coin2  = c2;
+    prev_coin5  = c5;
+    prev_coin10 = c10;
 
     // --- Simulación temporal ---
     if (justPressed(btnCoinSim, prev_btn_coin_sim)) {
@@ -288,6 +304,9 @@ static State executeMoney() {
         x_steps        = 0;
         gpio_set_level(SLAVE_BEGIN, 0);
         gpio_set_level(CHANGE_OUT,  0);
+        // Primera vez desde el arranque: deja coin_counter en -1 para absorber el
+        // pulso espurio del aceptador. Desde la segunda ronda en adelante: reinicia a 0.
+        if (coin_counter != -1) coin_counter = 0;
     }
 
     pollCoins();
