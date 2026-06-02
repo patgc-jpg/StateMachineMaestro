@@ -291,9 +291,13 @@ static State executeMoney() {
 
     char msg[48];
     if (!paid) {
-        int total = coinCounter.getTotal();
+        int total  = coinCounter.getTotal();
+        int pulsos = coinCounter.getLastPulses();
         if (total < 0) total = 0;   // primer arranque: ocultar el -1 inicial
-        snprintf(msg, sizeof(msg), "BIENVENIDO@ \n $%d/$%d pesos", total, COIN_PRICE);
+        if (pulsos > 0)
+            snprintf(msg, sizeof(msg), "$%d/$%d pesos\np:%d", total, COIN_PRICE, pulsos);
+        else
+            snprintf(msg, sizeof(msg), "BIENVENIDO@ \n $%d/$%d pesos", total, COIN_PRICE);
     } else {
         snprintf(msg, sizeof(msg), "Listo! $%d\nPulsa START!", COIN_PRICE);
     }

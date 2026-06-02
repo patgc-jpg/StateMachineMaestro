@@ -13,6 +13,7 @@ public:
 
     int  getTotal() const;
     bool isMetaAlcanzada() const;
+    int  getLastPulses() const;   // último conteo procesado (para debug en LCD)
 
 private:
     gpio_num_t _pin;
@@ -20,6 +21,7 @@ private:
     bool       _first_run;
     int        _sumaTotal;
     bool       _metaAlcanzada;
+    int        _lastPulses;
 
     static portMUX_TYPE     _mux;
     static volatile int     _pulsosTemporales;

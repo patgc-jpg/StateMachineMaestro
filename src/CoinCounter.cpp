@@ -9,7 +9,7 @@ volatile int64_t CoinCounter::_ultimoTiempoPulso = 0;
 
 CoinCounter::CoinCounter(gpio_num_t pin, int meta)
     : _pin(pin), _meta(meta), _first_run(true),
-      _sumaTotal(-1), _metaAlcanzada(false) {}
+      _sumaTotal(-1), _metaAlcanzada(false), _lastPulses(0) {}
 
 void IRAM_ATTR CoinCounter::_isr_handler(void* arg) {
     portENTER_CRITICAL_ISR(&_mux);
@@ -54,11 +54,13 @@ bool CoinCounter::update() {
     _pulsosTemporales     = 0;
     portEXIT_CRITICAL(&_mux);
 
+    _lastPulses = pulsosConfirmados;   // guarda para debug en LCD
+
     int valorMoneda = 0;
-    if      (pulsosConfirmados >= 100  && pulsosConfirmados <= 150)  valorMoneda = 1;
-    else if (pulsosConfirmados >= 230  && pulsosConfirmados <= 300)  valorMoneda = 2;
-    else if (pulsosConfirmados >= 500 && pulsosConfirmados <= 700) valorMoneda = 5;
-    else if (pulsosConfirmados >= 1000 && pulsosConfirmados <= 1500) valorMoneda = 10;
+    if      (pulsosConfirmados >= 50  && pulsosConfirmados <= 100)  valorMoneda = 1;
+    else if (pulsosConfirmados >= 130 && pulsosConfirmados <= 200)  valorMoneda = 2;
+    else if (pulsosConfirmados >= 300 && pulsosConfirmados <= 480) valorMoneda = 5;
+    else if (pulsosConfirmados >= 700 && pulsosConfirmados <= 1000) valorMoneda = 10;
 
     if (valorMoneda > 0) {
         _sumaTotal += valorMoneda;
@@ -78,3 +80,4 @@ bool CoinCounter::update() {
 
 int  CoinCounter::getTotal()        const { return _sumaTotal;     }
 bool CoinCounter::isMetaAlcanzada() const { return _metaAlcanzada; }
+int  CoinCounter::getLastPulses()   const { return _lastPulses;    }
