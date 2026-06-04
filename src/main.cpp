@@ -88,8 +88,8 @@
 #define MX1_DIR   GPIO_NUM_18
 
 // Motor X2 — lado derecho, montado invertido → se invierte por software
-#define MX2_STEP  GPIO_NUM_4
-#define MX2_DIR   GPIO_NUM_16
+#define MX2_STEP  GPIO_NUM_16
+#define MX2_DIR   GPIO_NUM_4
 
 // LCD I2C
 #define LCD_SDA_NUM   GPIO_NUM_21

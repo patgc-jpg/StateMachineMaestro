@@ -5,7 +5,7 @@
 
 class CoinCounter {
 public:
-    CoinCounter(gpio_num_t pin = GPIO_NUM_12, int meta = 12);
+    CoinCounter(gpio_num_t pin = GPIO_NUM_32, int meta = 12);
 
     void begin();   // Configura GPIO e ISR — llamar una vez en app_main
     void start();   // Inicia sesión de cobro (sumaTotal = -1 la primera vez, 0 las siguientes)
@@ -29,5 +29,6 @@ private:
 
     static void IRAM_ATTR _isr_handler(void* arg);
 
-    static constexpr int64_t TIEMPO_ESPERA_US = 150000;
+    static constexpr int64_t TIEMPO_ESPERA_US  = 200000;  // 200 ms de silencio = fin de inserción
+    static constexpr int64_t DEBOUNCE_PULSO_US = 50000;   // 50 ms mínimo entre pulsos válidos
 };

@@ -9,22 +9,26 @@ volatile int64_t CoinCounter::_ultimoTiempoPulso = 0;
 
 CoinCounter::CoinCounter(gpio_num_t pin, int meta)
     : _pin(pin), _meta(meta), _first_run(true),
-      _sumaTotal(-1), _metaAlcanzada(false), _lastPulses(0) {}
+      _sumaTotal(-1), _metaAlcanzada(false), _lastPulses(0) {} 
 
 void IRAM_ATTR CoinCounter::_isr_handler(void* arg) {
+    int64_t ahora = esp_timer_get_time();
     portENTER_CRITICAL_ISR(&_mux);
-    _pulsosTemporales++;
-    _ultimoTiempoPulso = esp_timer_get_time();
+    // Solo cuenta si pasó el tiempo de debounce desde el último pulso válido
+    if ((ahora - _ultimoTiempoPulso) >= DEBOUNCE_PULSO_US) {
+        _pulsosTemporales++;
+        _ultimoTiempoPulso = ahora;
+    }
     portEXIT_CRITICAL_ISR(&_mux);
 }
 
 void CoinCounter::begin() {
     gpio_config_t io_conf = {};
-    io_conf.intr_type    = GPIO_INTR_NEGEDGE;
+    io_conf.intr_type    = GPIO_INTR_POSEDGE;   // dispara en cada flanco HIGH
     io_conf.pin_bit_mask = (1ULL << _pin);
     io_conf.mode         = GPIO_MODE_INPUT;
-    io_conf.pull_up_en   = GPIO_PULLUP_ENABLE;
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en   = GPIO_PULLUP_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE; // reposo en LOW
     gpio_config(&io_conf);
 
     gpio_install_isr_service(0);
@@ -38,7 +42,7 @@ void CoinCounter::start() {
 
     portENTER_CRITICAL(&_mux);
     _pulsosTemporales  = 0;
-    _ultimoTiempoPulso = 0;
+    _ultimoTiempoPulso = esp_timer_get_time() - DEBOUNCE_PULSO_US; // permite el primer pulso inmediatamente
     portEXIT_CRITICAL(&_mux);
 }
 
@@ -54,25 +58,14 @@ bool CoinCounter::update() {
     _pulsosTemporales     = 0;
     portEXIT_CRITICAL(&_mux);
 
-    _lastPulses = pulsosConfirmados;   // guarda para debug en LCD
+    _lastPulses  = pulsosConfirmados;
+    _sumaTotal  += pulsosConfirmados;   // cada pulso HIGH = 1 unidad
 
-    int valorMoneda = 0;
-    if      (pulsosConfirmados >= 50  && pulsosConfirmados <= 100)  valorMoneda = 1;
-    else if (pulsosConfirmados >= 130 && pulsosConfirmados <= 200)  valorMoneda = 2;
-    else if (pulsosConfirmados >= 300 && pulsosConfirmados <= 480) valorMoneda = 5;
-    else if (pulsosConfirmados >= 700 && pulsosConfirmados <= 1000) valorMoneda = 10;
+    printf("Pulsos: %d | Total: $%d\n", pulsosConfirmados, _sumaTotal);
 
-    if (valorMoneda > 0) {
-        _sumaTotal += valorMoneda;
-        printf("Lectura: %d pulsos -> $%d | Total: $%d\n",
-               pulsosConfirmados, valorMoneda, _sumaTotal);
-
-        if (_sumaTotal >= _meta) {
-            _metaAlcanzada = true;
-            printf("=> Credito suficiente ($%d). Meta alcanzada.\n", _sumaTotal);
-        }
-    } else {
-        printf("Ruido descartado: %d pulsos\n", pulsosConfirmados);
+    if (_sumaTotal >= _meta) {
+        _metaAlcanzada = true;
+        printf("=> Meta alcanzada ($%d).\n", _sumaTotal);
     }
 
     return _metaAlcanzada;
