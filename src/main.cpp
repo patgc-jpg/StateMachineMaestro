@@ -38,9 +38,11 @@
 // ============================================================
 #define MM_PER_STEP         0.2f
 #define AXIS_LENGTH_MM      550.0f
-#define AXIS_MAX_STEPS      ((int32_t)(AXIS_LENGTH_MM / MM_PER_STEP))   // 2750 pasos
-#define AXIS_CENTER_STEPS   (AXIS_MAX_STEPS / 2)                         // 1375 pasos = 275 mm
-#define AXIS_HOME_STEPS     0
+#define AXIS_MAX_STEPS      ((int32_t)(AXIS_LENGTH_MM / MM_PER_STEP))   // 2750 pasos total
+#define AXIS_HALF_STEPS     (AXIS_MAX_STEPS / 2)                         // 1375 pasos = 275 mm
+// Home (0) = donde arranca la máquina físicamente
+// Centro de juego = +AXIS_HALF_STEPS
+// Límite de juego  = 0 (home) … +AXIS_MAX_STEPS (extremo)
 //
 // ============================================================
 // VELOCIDAD DE MOTORES
@@ -56,8 +58,6 @@
 // ============================================================
 #define BTN_LEFT   GPIO_NUM_14
 #define BTN_RIGHT  GPIO_NUM_27
-/*#define BTN_UP     GPIO_NUM_16   // reservado (eje Y va al esclavo)
-#define BTN_DOWN   GPIO_NUM_17   // reservado (eje Y va al esclavo)*/
 
 // ============================================================
 // DURACIONES (µs)
@@ -145,16 +145,13 @@ static DebouncedButton btnCoinSim(BTN_COIN_SIM, DEBOUNCE_US);
 static DebouncedButton btnStart  (BTN_START,    DEBOUNCE_US);
 static DebouncedButton btnLeft   (BTN_LEFT,     DEBOUNCE_US);
 static DebouncedButton btnRight  (BTN_RIGHT,    DEBOUNCE_US);
-/*static DebouncedButton btnUp     (BTN_UP,       DEBOUNCE_US);
-static DebouncedButton btnDown   (BTN_DOWN,     DEBOUNCE_US);
-*/
 // ============================================================
 // VARIABLES GLOBALES DE ESTADO
 // ============================================================
 static bool    is_new_state   = true;
 static int64_t state_start_us = 0;
 
-// Posición del eje X en pasos desde home (0 = home, AXIS_CENTER_STEPS = centro)
+// Posición del eje X: 0 = home físico, AXIS_HALF_STEPS = centro de juego, AXIS_MAX_STEPS = extremo
 static int32_t x_steps = 0;
 
 // Simulación temporal
@@ -217,9 +214,9 @@ static void onEnterState() {
 static bool stepX(int dir) {
     bool going_pos = (dir > 0);
 
-    // X1: adelante para X positivo   |   X2: invertido porque está montado al revés
+    // X1 normal; X2 montado al revés en el gantry → sentido eléctrico opuesto
     motorX1.setDirection(going_pos);
-    motorX2.setDirection(going_pos);
+    motorX2.setDirection(!going_pos);
 
     bool stepped = motorX1.update();   // true si el timer interno disparó un paso
     motorX2.update();                  // mismo delay → ambos avanzan juntos
@@ -279,7 +276,7 @@ static State executeMoney() {
         coinCounter.start();   // -1 primer arranque, 0 rondas siguientes
         coin_sim_count = 0;
         sim_ready      = false;
-        x_steps        = 0;
+        x_steps        = 0;   // home físico = origen del sistema de coordenadas
         gpio_set_level(SLAVE_BEGIN, 0);
         gpio_set_level(CHANGE_OUT,  0);
     }
@@ -323,8 +320,8 @@ static State executeBegin() {
 
     lcdUpdate("Centrando garra\nEspera...");
 
-    if      (x_steps < AXIS_CENTER_STEPS) stepX(+1);
-    else if (x_steps > AXIS_CENTER_STEPS) stepX(-1);
+    if      (x_steps < AXIS_HALF_STEPS) stepX(+1);   // avanza hacia el centro de juego
+    else if (x_steps > AXIS_HALF_STEPS) stepX(-1);
     else {
         gpio_set_level(SLAVE_BEGIN, 0);   // X llegó al centro, baja señal
         return STATE_GAME;
@@ -356,8 +353,8 @@ static State executeGame() {
     }
 
     if (dir != 0) {
-        bool at_limit = (dir > 0 && x_steps >= AXIS_MAX_STEPS - 1) ||
-                        (dir < 0 && x_steps <= AXIS_HOME_STEPS);
+        bool at_limit = (dir > 0 && x_steps >= AXIS_MAX_STEPS) ||
+                        (dir < 0 && x_steps <= 0);
         if (!at_limit) {
             motorX1.setDelay(STEP_DELAY_MIN_US);
             motorX2.setDelay(STEP_DELAY_MIN_US);
@@ -420,8 +417,8 @@ static State executeZeroX() {
     // TODO ← coloca tu mensaje para ZERO_X
     lcdUpdate("Regresando...\n");
 
-    if      (x_steps > AXIS_HOME_STEPS) stepX(-1);
-    else if (x_steps < AXIS_HOME_STEPS) stepX(+1);
+    if      (x_steps > 0) stepX(-1);   // regresa al home físico
+    else if (x_steps < 0) stepX(+1);
     else {
         // Llegó a home — revisar si cayó un premio
         // Sensor activo-LOW: LOW = premio detectado; GPIO39 requiere pull-up externo
